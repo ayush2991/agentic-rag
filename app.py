@@ -8,8 +8,8 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.tools.retriever import create_retriever_tool
 from langgraph.graph import MessagesState
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage
-from typing import Union, Dict, Any
+from langchain_core.messages import AIMessage, BaseMessage
+from typing import Union, Dict, Any, Optional, Tuple, List
 
 # Constants
 URLS = [
@@ -24,7 +24,7 @@ EMBEDDING_CONFIG = {
 
 RETRIEVER_CONFIG = {
     "search_type": "similarity",
-    "search_kwargs": {"k": 4, "lambda_mult": 0.5}
+    "search_kwargs": {"k": 4} # lambda_mult is for MMR, not typically similarity
 }
 
 # Page configuration
@@ -37,42 +37,57 @@ st.set_page_config(
 
 # Setup logging and configuration
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-nest_asyncio.apply()
+# Configure logger if not already configured (e.g., by Streamlit's root logger)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+else:
+    logger.setLevel(logging.INFO) # Ensure level is set if handlers exist
+
+nest_asyncio.apply() # For WebBaseLoader in sync Streamlit environment
 
 @st.cache_resource
-def initialize_resources(urls):
-    """Initialize all resources needed for the RAG application."""
+def load_and_prepare_resources(_urls: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
+    """
+    Initialize all resources needed for the RAG application.
+    This function is cached; it creates and returns resources without modifying session state directly.
+    The _urls argument is prefixed with an underscore as a convention for cached function arguments.
+    """
     try:
-        docs = WebBaseLoader(urls).load()
+        logger.info(f"Attempting to load documents from URLs: {_urls}")
+        # WebBaseLoader expects a list of strings
+        docs = WebBaseLoader(list(_urls)).load()
         if not docs:
-            logger.error("No documents loaded")
+            logger.error("No documents loaded from URLs.")
             return None
+        logger.info(f"Successfully loaded {len(docs)} documents.")
         
         text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             chunk_size=100, chunk_overlap=50
         )
         doc_splits = text_splitter.split_documents(docs)
+        logger.info(f"Split documents into {len(doc_splits)} chunks.")
         
         embeddings = GoogleGenerativeAIEmbeddings(
             model=EMBEDDING_CONFIG["model"],
             google_api_key=st.secrets["google_api_key"]
         )
         
-        vector_store, retriever, retriever_tool = setup_retriever(doc_splits, embeddings)
-        if not all([vector_store, retriever, retriever_tool]):
-            logger.error("Failed to setup retriever components")
+        retriever_components = setup_retriever(doc_splits, embeddings)
+        if not retriever_components:
+            logger.error("Failed to setup retriever components.")
             return None
+        vector_store, retriever, retriever_tool = retriever_components
 
         # Initialize chat model with correct provider
         response_model_with_tools = init_chat_model(
             model="gemini-2.0-flash",
-            model_provider="google-genai",
+            model_provider="google-genai", # Ensure this matches your init_chat_model capabilities
             google_api_key=st.secrets["google_api_key"]
         ).bind_tools([retriever_tool])
+        logger.info("Chat model initialized and tools bound.")
         
-        # Store resources in session state
-        st.session_state.update({
+        # Return all created resources
+        return {
             "docs": docs,
             "text_splitter": text_splitter,
             "doc_splits": doc_splits,
@@ -80,62 +95,66 @@ def initialize_resources(urls):
             "retriever": retriever,
             "retriever_tool": retriever_tool,
             "response_model": response_model_with_tools
-        })
-        
-        return {
-            "docs": docs,
-            "doc_splits": doc_splits,
         }
     except Exception as e:
-        logger.error(f"Initialization error: {str(e)}")
+        logger.error(f"Initialization error during resource loading: {str(e)}", exc_info=True)
         return None
 
-def is_system_initialized() -> bool:
-    """Check if all required components are initialized in session state."""
-    required_components = [
-        "docs",
-        "text_splitter",
-        "doc_splits",
-        "vector_store",
-        "retriever",
-        "retriever_tool",
-        "response_model"
-    ]
-    return all(comp in st.session_state for comp in required_components)
-
-def ensure_initialized():
-    """Ensure system is initialized or initialize it."""
-    if not is_system_initialized():
-        with st.spinner("Initializing system..."):
-            resources = initialize_resources(URLS)
-            if not resources or not is_system_initialized():
-                st.error("Failed to initialize system")
-                st.stop()
-            st.success("✅ System initialized successfully")
-            st.write(
-                f"Loaded {len(resources['docs'])} documents and "
-                f"{len(resources['doc_splits'])} document splits."
-            )
-
-def process_query(query: str) -> Union[Dict[str, Any], AIMessage]:
-    """Process a user query using the retriever tool."""
-    ensure_initialized()
-    return {"messages": [st.session_state.response_model.invoke(
-        [{"role": "user", "content": query}]
-    )]}
-
-def setup_retriever(doc_splits, embeddings):
+def setup_retriever(
+    doc_splits: List[Any], 
+    embeddings: GoogleGenerativeAIEmbeddings
+) -> Optional[Tuple[InMemoryVectorStore, Any, Any]]: # Using Any for retriever and tool for brevity
     """Setup vector store and retriever tool."""
-    vector_store = InMemoryVectorStore.from_documents(doc_splits, embeddings)
-    retriever = vector_store.as_retriever(
-        search_type=RETRIEVER_CONFIG["search_type"],
-        search_kwargs=RETRIEVER_CONFIG["search_kwargs"]
-    )
-    return vector_store, retriever, create_retriever_tool(
-        retriever,
-        "retrieve_blog_posts",
-        "Search and return information about Lilian Weng blog posts."
-    )
+    if not doc_splits:
+        logger.warning("No document splits provided to setup_retriever.")
+        return None
+    # Embeddings object itself is checked by type hinting, its validity by usage
+        
+    try:
+        vector_store = InMemoryVectorStore.from_documents(doc_splits, embeddings)
+        retriever = vector_store.as_retriever(
+            search_type=RETRIEVER_CONFIG["search_type"],
+            search_kwargs=RETRIEVER_CONFIG["search_kwargs"]
+        )
+        retriever_tool = create_retriever_tool(
+            retriever,
+            "retrieve_blog_posts", # Tool name
+            "Search and return information about Lilian Weng blog posts." # Tool description
+        )
+        logger.info("Retriever setup successful.")
+        return vector_store, retriever, retriever_tool
+    except Exception as e:
+        logger.error(f"Error setting up retriever: {str(e)}", exc_info=True)
+        return None
+
+def process_query(query: str) -> Optional[AIMessage]:
+    """
+    Process a user query using the response model.
+    Assumes 'response_model' is available in st.session_state.
+    """
+    if "response_model" not in st.session_state:
+        logger.error("CRITICAL: process_query called but response_model not in session_state.")
+        st.error("System error: Response model not available. Please refresh the page.")
+        return None
+
+    try:
+        # Invoke the model with the user query.
+        # The response_model is expected to be a LangChain runnable (e.g., ChatModel bound with tools)
+        response: BaseMessage = st.session_state.response_model.invoke(
+            [{"role": "user", "content": query}]
+        )
+        if isinstance(response, AIMessage):
+            return response
+        else:
+            logger.warning(f"Expected AIMessage, but got {type(response)}. Response: {response}")
+            # Attempt to construct an AIMessage if possible, or handle error
+            # For now, returning None if not AIMessage to signal an issue.
+            st.error("Received an unexpected response format from the AI model.")
+            return None
+    except Exception as e:
+        logger.error(f"Error during model invocation in process_query: {str(e)}", exc_info=True)
+        st.error(f"Sorry, an error occurred while processing your query: {str(e)}")
+        return None
 
 def generate_query_or_respond(response_model, state: MessagesState):
     """Call the model to generate a response based on the current state.
@@ -182,18 +201,61 @@ def main():
     )
     st.image("./agentic-rag-graph.png", caption="Flowchart of the RAG process", use_container_width=True)
     
-    try:
-        ensure_initialized()
+    # System Initialization Block
+    if not st.session_state.get("system_ready", False):
+        with st.spinner("Initializing system... Please wait."):
+            # Pass URLS as a tuple to ensure hashability for @st.cache_resource
+            all_resources = load_and_prepare_resources(tuple(URLS)) 
+            
+            if all_resources and "response_model" in all_resources:
+                st.session_state.update(all_resources)
+                st.session_state.system_ready = True
+                st.success("✅ System initialized successfully!")
+                logger.info("System initialized successfully and resources populated in session state.")
+                # Display info about loaded docs from session state for consistency
+                if "docs" in st.session_state and "doc_splits" in st.session_state:
+                    st.write(
+                        f"Loaded {len(st.session_state['docs'])} documents and "
+                        f"{len(st.session_state['doc_splits'])} document splits."
+                    )
+            else:
+                st.error("System initialization failed. Critical resources could not be loaded. Please check logs or try refreshing.")
+                logger.error("System initialization failed: load_and_prepare_resources returned None or incomplete data.")
+                st.session_state.system_ready = False 
+                # The app will be non-functional for queries if initialization fails.
+    
+    # Main application logic - only if system is ready
+    if st.session_state.get("system_ready", False):
         query = st.text_input("Ask a question about the documents:")
         if query:
             with st.spinner("Retrieving information..."):
-                raw_response = process_query(query)
-                st.write(raw_response["messages"][-1])
-            st.success("✅ Information retrieved successfully")
+                try:
+                    ai_response = process_query(query) # Expects AIMessage or None
+                    
+                    if ai_response and hasattr(ai_response, 'content'):
+                        # Display content and optionally info about tool calls
+                        if ai_response.tool_calls:
+                            tool_info = []
+                            for tc in ai_response.tool_calls:
+                                tool_name = tc.get("name", "Unknown tool")
+                                tool_args = tc.get("args", {})
+                                tool_info.append(f"- {tool_name}({tool_args})")
+                            st.info(f"The AI decided to use tools:\n" + "\n".join(tool_info))
+                        
+                        st.markdown(f"**AI:** {ai_response.content}")
+                        st.success("✅ Information retrieved successfully")
+                    elif ai_response: # It's an AIMessage but no .content? Or some other structure.
+                        logger.warning(f"AI response received but content attribute missing or empty: {ai_response}")
+                        st.write(f"**AI response (raw):** {str(ai_response)}") 
+                        st.success("✅ Information retrieved (check format)")
+                    # If ai_response is None, process_query already showed an error.
+                except Exception as e: # Catch any unexpected error during query processing or display
+                    st.error(f"An error occurred while handling your query: {str(e)}")
+                    logger.error(f"Error in query handling block: {str(e)}", exc_info=True)
     
-    except Exception as e:
-        st.error(f"System error: {str(e)}")
-        logger.error(f"System error: {str(e)}")
+    elif "system_ready" in st.session_state and not st.session_state.system_ready:
+        # This state means initialization was attempted but failed.
+        st.warning("System is not ready. Please check error messages above or try refreshing the page.")
 
 if __name__ == "__main__":
     main()
