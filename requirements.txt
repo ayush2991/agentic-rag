@@ -1,0 +1,9 @@
+streamlit
+langgraph 
+langchain[openai]
+langchain-community 
+langchain-text-splitters
+beautifulsoup4
+watchdog
+langchain_google_genai
+nest_asyncio
