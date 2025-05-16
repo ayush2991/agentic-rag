@@ -17,10 +17,34 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt import tools_condition
 from functools import wraps
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+# Ensure streamlit logger also shows INFO
+logging.getLogger('streamlit').setLevel(logging.INFO)
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Add a StreamHandler to show logs in Streamlit
+if not logger.handlers:
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+def log_time_info(start_time: float, step: str):
+    """Log time taken for a processing step"""
+    elapsed = time.time() - start_time
+    logger.info(f"⏱️ Time taken for {step}: {elapsed:.2f} seconds")
 
 # Constants for local data loading
 DATA_PATH = "./data"
@@ -235,8 +259,20 @@ st.set_page_config(
 
 nest_asyncio.apply()  # For WebBaseLoader in sync Streamlit environment
 
+# Add these cache hash functions near the top of the file after imports
+def hash_embeddings_model(model):
+    """Hash function for embeddings model"""
+    return model.model_name if hasattr(model, 'model_name') else str(model)
 
-@st.cache_resource(ttl=24 * 60 * 60)
+def hash_document(doc):
+    """Hash function for document objects"""
+    return f"{doc.page_content[:100]}_{str(doc.metadata)}"
+
+# Modify the cache_resource decorator for load_and_prepare_resources
+@st.cache_resource(ttl=24 * 60 * 60, hash_funcs={
+    HuggingFaceEmbeddings: hash_embeddings_model,
+    type: lambda x: str(x),  # For handling any type objects
+})
 def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     """
     Initialize all resources needed for the RAG application.
@@ -248,18 +284,37 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     try:
         logger.info(f"Attempting to load documents from path: {_data_path}")
 
-        # Load all text files from the data directory
+        # Load all text files from the data directory in parallel
+        start_time = time.time()
         docs = []
-        for filename in os.listdir(_data_path):
-            if filename.endswith(".txt") or filename.endswith(".md"):
-                file_path = os.path.join(_data_path, filename)
+        text_files = [
+            os.path.join(_data_path, f) for f in os.listdir(_data_path) 
+            if f.endswith((".txt", ".md"))
+        ]
+        logger.info(f"Found {len(text_files)} text files to process")
+        
+        def load_single_document(file_path: str) -> List[Any]:
+            try:
+                logger.info(f"Loading {os.path.basename(file_path)}...")
+                loader = TextLoader(file_path)
+                return loader.load()
+            except Exception as e:
+                logger.error(f"Error loading {os.path.basename(file_path)}: {str(e)}")
+                return []
+
+        # Use ThreadPoolExecutor for parallel loading
+        with ThreadPoolExecutor() as executor:
+            future_to_file = {executor.submit(load_single_document, f): f for f in text_files}
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
                 try:
-                    loader = TextLoader(file_path)
-                    docs.extend(loader.load())
-                    logger.info(f"Successfully loaded {filename}")
+                    doc_content = future.result()
+                    docs.extend(doc_content)
+                    logger.info(f"✅ Successfully loaded {os.path.basename(file_path)}")
                 except Exception as e:
-                    logger.error(f"Error loading {filename}: {str(e)}")
-                    continue
+                    logger.error(f"❌ Failed to load {os.path.basename(file_path)}: {str(e)}")
+        
+        log_time_info(start_time, "document loading")
 
         if not docs:
             logger.error(
@@ -272,12 +327,17 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
             chunk_size=100, chunk_overlap=50
         )
         doc_splits = text_splitter.split_documents(docs)
+        log_time_info(start_time, "document splitting")
         logger.info(f"Split documents into {len(doc_splits)} chunks.")
 
+        # Initialize embeddings model
+        start_time = time.time()
         model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        logger.info(f"Initializing embeddings model: {model_name}")
         hf_embeddings = HuggingFaceEmbeddings(
             model_name=model_name, model_kwargs={"device": "cpu"}
         )  # Or 'cuda' if you have a GPU
+        log_time_info(start_time, "embeddings model initialization")
 
         retriever_components = setup_retriever(doc_splits, hf_embeddings)
         if not retriever_components:
@@ -375,21 +435,88 @@ def setup_retriever(
     # Embeddings object itself is checked by type hinting, its validity by usage
 
     try:
-        vector_store = InMemoryVectorStore.from_documents(doc_splits, embeddings)
+        start_time = time.time()
+        
+        # Generate embeddings in parallel with caching
+        all_embeddings = generate_embeddings_in_parallel(doc_splits, embeddings)
+        
+        # Create vector store with pre-computed embeddings
+        texts = [doc.page_content for doc in doc_splits]
+        vector_store = InMemoryVectorStore.from_texts(
+            texts=texts,
+            embedding=embeddings,
+            metadatas=[doc.metadata for doc in doc_splits],
+            embeddings=all_embeddings
+        )
+        log_time_info(start_time, "vector store creation")
+        
         retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG["search_type"],
             search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
         )
         retriever_tool = create_retriever_tool(
             retriever,
-            "retrieve_blog_posts",  # Tool name
-            "Search and return information about Lilian Weng blog posts.",  # Tool description
+            "retrieve_harry_potter",  # Tool name
+            "Search and return information from Harry Potter books.",  # Tool description
         )
         logger.info("Retriever setup successful.")
         return vector_store, retriever, retriever_tool
     except Exception as e:
         logger.error(f"Error setting up retriever: {str(e)}", exc_info=True)
         return None
+
+
+@st.cache_data(show_spinner=False, hash_funcs={
+    HuggingFaceEmbeddings: hash_embeddings_model,
+    type: lambda x: str(x),
+})
+def generate_embeddings_in_parallel(
+    _doc_splits: List[Any], _embeddings_model: HuggingFaceEmbeddings, batch_size: int = 20
+) -> List[List[float]]:
+    """
+    Generate embeddings for document splits in parallel batches.
+    Args:
+        _doc_splits: List of document splits to generate embeddings for (prefixed with _ to skip hashing)
+        _embeddings_model: The embeddings model to use
+        batch_size: Number of documents to process in each batch
+    Returns:
+        List of embeddings vectors
+    """
+    logger.info(f"Generating embeddings for {len(_doc_splits)} chunks in batches of {batch_size}")
+    start_time = time.time()
+    
+    all_embeddings = []
+    
+    def process_batch(batch: List[Any]) -> List[List[float]]:
+        texts = [doc.page_content for doc in batch]
+        try:
+            batch_embeddings = _embeddings_model.embed_documents(texts)
+            logger.info(f"✅ Successfully embedded batch of {len(texts)} documents")
+            return batch_embeddings
+        except Exception as e:
+            logger.error(f"❌ Failed to embed batch: {str(e)}")
+            return []
+    
+    # Process in batches using ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        batches = [
+            _doc_splits[i:i + batch_size] 
+            for i in range(0, len(_doc_splits), batch_size)
+        ]
+        futures = [executor.submit(process_batch, batch) for batch in batches]
+        
+        for idx, future in enumerate(as_completed(futures), 1):
+            try:
+                batch_embeddings = future.result()
+                all_embeddings.extend(batch_embeddings)
+                logger.info(f"Completed batch {idx}/{len(batches)}")
+            except Exception as e:
+                logger.error(f"Error processing batch {idx}: {str(e)}")
+    
+    log_time_info(start_time, "embeddings generation")
+    logger.info(f"Generated {len(all_embeddings)} embeddings successfully")
+    
+    return all_embeddings
 
 
 def generate_query_or_respond(state: MessagesState):
