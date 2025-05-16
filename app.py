@@ -251,7 +251,7 @@ def generate_answer(state: MessagesState) -> Dict[str, List[BaseMessage]]:
 
 # Page configuration
 st.set_page_config(
-    page_title="Agentic RAG Application",
+    page_title="Agentic RAG Application: Harry Potter Edition",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -259,6 +259,9 @@ st.set_page_config(
 
 nest_asyncio.apply()  # For WebBaseLoader in sync Streamlit environment
 
+@st.cache_resource(
+    show_spinner="Loading resources...",
+    ttl=7 * 24 * 60 * 60)
 def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     """
     Initialize all resources needed for the RAG application.
@@ -488,7 +491,7 @@ def setup_retriever(
         retriever_tool = create_retriever_tool(
             retriever,
             "retrieve_harry_potter",
-            "Search and return information from Harry Potter books.",
+            "Search and return snippets from the Harry Potter books. Uses Qdrant vector store.",
         )
         logger.info("Retriever setup successful.")
         return retriever, retriever_tool
@@ -531,7 +534,7 @@ def generate_query_or_respond(state: MessagesState):
 
 def main():
     logger.info("Application starting")
-    st.title("Agentic RAG Application")
+    st.title("Agentic RAG Application: Harry Potter Edition")
 
     with st.sidebar:
         st.header("📚 Source Documents")
@@ -594,7 +597,7 @@ def main():
     else:
         logger.info("System already ready. Skipping resource loading.")
     # Main application logic - only if system is ready
-    query = st.text_input("Ask a question about the documents:")
+    query = st.text_input("Ask any question to the agentic RAG application:", placeholder="\"Who betrayed Harry's parents?\" or \"How to make pasta?\"")
     if query:
         logger.info(f"Processing query: '{query[:100]}...'")
         # Create a container for the stream output
