@@ -115,8 +115,14 @@ def generate_answer(state: MessagesState) -> Dict[str, List[BaseMessage]]:
     """
     try:
         # Call the response model to generate an answer
-        query = state["messages"][0]["content"]  # Assuming the first message is the query
-        document = state["messages"][-1]["content"]  # Assuming the last message is the document
+        # MessagesState stores a list of BaseMessage objects. Access content via the .content attribute.
+        if not state["messages"]:
+            logger.error("Cannot generate answer: MessagesState is empty.")
+            return _package_message_for_state(AIMessage(content="Error: No messages found to generate an answer from."))
+
+        # Assuming the first message is the user's query and the last is the retrieved document.
+        query = state["messages"][0].content if state["messages"] else "No query found"
+        document = state["messages"][-1].content if len(state["messages"]) > 1 else "No document found"
         response = st.session_state.response_model.invoke(
             [{"role": "user", "content": f"Answer the question '{query}' based on this document: {document}"}]
         )
@@ -343,22 +349,42 @@ def main():
                 try:
                     ai_response = process_query(query) # Expects AIMessage or None
                     
-                    if ai_response and hasattr(ai_response, 'content'):
-                        # Display content and optionally info about tool calls
-                        if ai_response.tool_calls:
-                            tool_info = []
-                            for tc in ai_response.tool_calls:
-                                tool_name = tc.get("name", "Unknown tool")
-                                tool_args = tc.get("args", {})
-                                tool_info.append(f"- {tool_name}({tool_args})")
-                            st.info(f"The AI decided to use tools:\n" + "\n".join(tool_info))
+                    if ai_response: # ai_response is an AIMessage
+                        displayed_something = False
+
+                        # Display text content if available
+                        if isinstance(ai_response.content, str) and ai_response.content.strip():
+                            st.markdown(f"**AI:** {ai_response.content}")
+                            displayed_something = True
+                        elif isinstance(ai_response.content, list) and ai_response.content: # Handle list content (e.g. multimodal)
+                            st.markdown("**AI:**")
+                            for item in ai_response.content:
+                                if isinstance(item, str): st.markdown(item)
+                                # Add more specific handling for dict content if needed (e.g. images)
+                                else: st.write(item)
+                            displayed_something = True
                         
-                        st.markdown(f"**AI:** {ai_response.content}")
-                        st.success("✅ Information retrieved successfully")
-                    elif ai_response: # It's an AIMessage but no .content? Or some other structure.
-                        logger.warning(f"AI response received but content attribute missing or empty: {ai_response}")
-                        st.write(f"**AI response (raw):** {str(ai_response)}") 
-                        st.success("✅ Information retrieved (check format)")
+                        # Display tool call information if available
+                        if ai_response.tool_calls:
+                            tool_messages = []
+                            for tc in ai_response.tool_calls:
+                                tool_name = tc.get("name", "Unknown tool") # ToolCall is a TypedDict
+                                tool_args = tc.get("args", {})
+                                tool_messages.append(f"- Tool: `{tool_name}`, Arguments: `{tool_args}`")
+                            
+                            expander_title = "🛠️ Tool Call Details"
+                            if not (isinstance(ai_response.content, str) and ai_response.content.strip()): # If no primary text content
+                                st.info("The AI is using tools to process your request.")
+                            with st.expander(expander_title, expanded=True):
+                                for msg in tool_messages:
+                                    st.markdown(msg)
+                            displayed_something = True
+
+                        if displayed_something:
+                            st.success("✅ AI interaction processed.")
+                        else:
+                            st.warning("AI returned a response with no actionable content or tool calls.")
+                            logger.warning(f"AI response is effectively empty: {ai_response}")
                     # If ai_response is None, process_query already showed an error.
                 except Exception as e: # Catch any unexpected error during query processing or display
                     st.error(f"An error occurred while handling your query: {str(e)}")
