@@ -5,7 +5,7 @@ import nest_asyncio
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain.tools.retriever import create_retriever_tool
+from langchain.tools.retriever import create_retriever_tool 
 from langgraph.graph import MessagesState
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, BaseMessage
@@ -61,6 +61,15 @@ class RelevanceCheckOutput(BaseModel):
             raise ValueError("Reason must be a substantive explanation.")
         return value
 
+# Helper function to package messages for LangGraph state updates
+def _package_message_for_state(message: BaseMessage) -> Dict[str, List[BaseMessage]]:
+    """
+    Encapsulates a single message into the dictionary format expected by LangGraph
+    when using `add_messages` reducer for a 'messages' key in the state.
+    """
+    return {"messages": [message]}
+
+
 @st.cache_data
 def check_relevance_and_suggest_action(
         document: str,
@@ -91,8 +100,11 @@ def check_relevance_and_suggest_action(
         logger.error(f"Error during relevance check: {str(e)}", exc_info=True)
         return RelevanceBasedAction.GENERATE_ANSWER
     
+# Note: The type hint for generate_answer should ideally be Dict[str, List[BaseMessage]]
+# or a more specific TypedDict representing your LangGraph state, rather than str,
+# as it needs to return a dictionary to update the graph's state.
 @st.cache_data
-def generate_answer(document: str, query: str) -> str:
+def generate_answer(state: MessagesState) -> Dict[str, List[BaseMessage]]:
     """
     Generate an answer based on the document and user query.
     Args:
@@ -103,17 +115,19 @@ def generate_answer(document: str, query: str) -> str:
     """
     try:
         # Call the response model to generate an answer
+        query = state["messages"][0]["content"]  # Assuming the first message is the query
+        document = state["messages"][-1]["content"]  # Assuming the last message is the document
         response = st.session_state.response_model.invoke(
             [{"role": "user", "content": f"Answer the question '{query}' based on this document: {document}"}]
         )
         if isinstance(response, AIMessage):
-            return {"messages": [response]}
+            return _package_message_for_state(response)
         else:
             raise ValueError("Unexpected response format from answer generation model.")
     except Exception as e:
         logger.error(f"Error during answer generation: {str(e)}", exc_info=True)
-        return "An error occurred while generating the answer."
-
+        # Return an error message in the correct format for MessagesState
+        return _package_message_for_state(AIMessage(content=f"An error occurred while generating the answer: {str(e)}"))
 
 # Page configuration
 st.set_page_config(
@@ -280,7 +294,7 @@ def generate_query_or_respond(response_model, state: MessagesState):
         ...          "content": "Let me search the documents...",
         ...          "tool_calls": [{"name": "retrieve_blog_posts", ...}]}]}
     """
-    return {"messages": [response_model.invoke(state["messages"])]}
+    return _package_message_for_state(response_model.invoke(state["messages"]))
 
 def main():
     st.title("Agentic RAG Application")
