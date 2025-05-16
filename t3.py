@@ -5,21 +5,22 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from typing import List, Dict, Any
 import uuid
 import getpass # To prompt for API key if not set
+import streamlit as st
 
 # --- Configuration ---
 DATA_DIR = "./data/"
 # --- Qdrant Cloud Specific Configuration ---
 # IMPORTANT: Replace with your actual Qdrant Cloud Cluster URL and API Key
 # Get these from your Qdrant Cloud dashboard (e.g., https://cloud.qdrant.io/)
-QDRANT_CLOUD_URL = "https://65cc3c79-a0f3-45d6-820e-cbc18bd3c4cb.us-east4-0.gcp.cloud.qdrant.io:6333" # Recommended: Set as environment variable
-QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.7YG52Wg3P9Hsmo8Lia0ONy59vkI23fXHpUY4_ugvG6A"   # Recommended: Set as environment variable
+QDRANT_CLOUD_URL = st.secrets["QDRANT_CLOUD_URL"] # Recommended: Set as environment variable
+QDRANT_API_KEY = st.secrets["QDRANT_API_KEY"] # Recommended: Set as environment variable
 
 COLLECTION_NAME = "harry_potter_collection_2" # Changed collection name for clarity
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 BATCH_SIZE = 16
 
-GOOGLE_API_KEY = "AIzaSyAWbJfFtilX1JQ6dgjNmk9Z99nplDGBPkI"  # Set your Google API Key as an environment variable
+GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]  # Set your Google API Key as an environment variable
 
 # --- Gemini Embedding Model Setup ---
 # Ensure GOOGLE_API_KEY environment variable is set or prompt for it
