@@ -3,8 +3,8 @@ from langchain_community.document_loaders import TextLoader
 import logging
 import nest_asyncio
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.vectorstores import InMemoryVectorStore
 from langchain.tools.retriever import create_retriever_tool
 from langgraph.graph import MessagesState
 from langchain.chat_models import init_chat_model
@@ -65,11 +65,6 @@ REWRITE_PROMPT = (
     "\n ------- \n"
     "Formulate a concise, improved question:"
 )
-
-
-EMBEDDING_CONFIG = {
-    "model": "models/text-embedding-004",
-}
 
 RETRIEVER_CONFIG = {
     "search_type": "similarity",
@@ -259,20 +254,6 @@ st.set_page_config(
 
 nest_asyncio.apply()  # For WebBaseLoader in sync Streamlit environment
 
-# Add these cache hash functions near the top of the file after imports
-def hash_embeddings_model(model):
-    """Hash function for embeddings model"""
-    return model.model_name if hasattr(model, 'model_name') else str(model)
-
-def hash_document(doc):
-    """Hash function for document objects"""
-    return f"{doc.page_content[:100]}_{str(doc.metadata)}"
-
-# Modify the cache_resource decorator for load_and_prepare_resources
-@st.cache_resource(ttl=24 * 60 * 60, hash_funcs={
-    HuggingFaceEmbeddings: hash_embeddings_model,
-    type: lambda x: str(x),  # For handling any type objects
-})
 def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     """
     Initialize all resources needed for the RAG application.
@@ -281,6 +262,7 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     The _data_path argument is prefixed with an underscore as a convention for cached function arguments.
     """
     logger.info("Starting resource initialization")
+    logger.info(f"Executing load_and_prepare_resources for path: {_data_path}. (Cache status: if this msg repeats often on reruns without code changes, it's a cache miss or forced re-run due to initialization failure).")
     try:
         logger.info(f"Attempting to load documents from path: {_data_path}")
 
@@ -320,6 +302,7 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
             logger.error(
                 f"No documents loaded from path: {_data_path}. Ensure the directory exists and contains supported files."
             )
+            logger.warning("load_and_prepare_resources: No documents loaded. Returning None.")
             return None
         logger.info(f"Successfully loaded {len(docs)} documents.")
 
@@ -330,18 +313,10 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
         log_time_info(start_time, "document splitting")
         logger.info(f"Split documents into {len(doc_splits)} chunks.")
 
-        # Initialize embeddings model
-        start_time = time.time()
-        model_name = "sentence-transformers/all-MiniLM-L6-v2"
-        logger.info(f"Initializing embeddings model: {model_name}")
-        hf_embeddings = HuggingFaceEmbeddings(
-            model_name=model_name, model_kwargs={"device": "cpu"}
-        )  # Or 'cuda' if you have a GPU
-        log_time_info(start_time, "embeddings model initialization")
-
-        retriever_components = setup_retriever(doc_splits, hf_embeddings)
+        retriever_components = setup_retriever(doc_splits)
         if not retriever_components:
             logger.error("Failed to setup retriever components.")
+            logger.warning("load_and_prepare_resources: setup_retriever failed. Returning None.")
             return None
         vector_store, retriever, retriever_tool = retriever_components
 
@@ -403,6 +378,7 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
 
         logger.info("State graph built successfully.")
 
+        logger.info("load_and_prepare_resources completed successfully. Returning resources.")
         # Return all created resources
         return {
             "docs": docs,
@@ -419,91 +395,47 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
         logger.error(
             f"Initialization error during resource loading: {str(e)}", exc_info=True
         )
+        logger.warning("load_and_prepare_resources failed due to an exception. Returning None.")
         return None
 
 
 def setup_retriever(
-    doc_splits: List[Any], embeddings: HuggingFaceEmbeddings
-) -> Optional[
-    Tuple[InMemoryVectorStore, Any, Any]
-]:  # Using Any for retriever and tool for brevity
+    doc_splits: List[Any]
+) -> Optional[Tuple[InMemoryVectorStore, Any, Any]]:
     """Setup vector store and retriever tool."""
     logger.info(f"Setting up retriever with {len(doc_splits)} document splits")
     if not doc_splits:
         logger.warning("No document splits provided to setup_retriever.")
         return None
-    # Embeddings object itself is checked by type hinting, its validity by usage
 
     try:
         start_time = time.time()
         
-        # Generate embeddings in parallel with caching
-        all_embeddings = generate_embeddings_in_parallel(doc_splits, embeddings)
-        if not all_embeddings or len(all_embeddings) != len(doc_splits):
-            logger.error("Embeddings generation failed or returned incorrect number of embeddings.")
-            return None
-        
-        # Create vector store with pre-computed embeddings
+        # Create vector store and add texts directly
         texts = [doc.page_content for doc in doc_splits]
-        vector_store = InMemoryVectorStore.from_embeddings(
-            texts=texts, # The text content for each document
-            embeddings=all_embeddings, # The pre-computed embeddings
-            embedding=embeddings, # The embedding model (for consistency/future use by the store)
-            metadatas=[doc.metadata for doc in doc_splits]
+        metadatas = [doc.metadata for doc in doc_splits]
+        logger.info(f"Adding {len(texts)} texts to vector store.")
+        vector_store = InMemoryVectorStore(embedding=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"))
+        vector_store.add_documents(
+            doc_splits
         )
+        logger.info("Vector store created and texts added successfully.")
         log_time_info(start_time, "vector store creation")
-        
+
         retriever = vector_store.as_retriever(
             search_type=RETRIEVER_CONFIG["search_type"],
             search_kwargs=RETRIEVER_CONFIG["search_kwargs"],
         )
         retriever_tool = create_retriever_tool(
             retriever,
-            "retrieve_harry_potter",  # Tool name
-            "Search and return information from Harry Potter books.",  # Tool description
+            "retrieve_harry_potter",
+            "Search and return information from Harry Potter books.",
         )
         logger.info("Retriever setup successful.")
         return vector_store, retriever, retriever_tool
     except Exception as e:
         logger.error(f"Error setting up retriever: {str(e)}", exc_info=True)
         return None
-
-
-@st.cache_data(show_spinner=False, hash_funcs={
-    HuggingFaceEmbeddings: hash_embeddings_model,
-    type: lambda x: str(x),
-})
-def generate_embeddings_in_parallel(
-    _doc_splits: List[Any], _embeddings_model: HuggingFaceEmbeddings
-) -> List[List[float]]:
-    """
-    Generate embeddings for document splits.
-    Relies on the internal batching mechanism of the HuggingFaceEmbeddings model.
-    Args:
-        _doc_splits: List of document splits to generate embeddings for (prefixed with _ to skip hashing)
-        _embeddings_model: The embeddings model to use
-    Returns:
-        List of embeddings vectors
-    """
-    if not _doc_splits:
-        logger.warning("No document splits provided for embedding generation.")
-        return []
-
-    logger.info(f"Generating embeddings for {len(_doc_splits)} document chunks...")
-    start_time = time.time()
-    
-    texts_to_embed = [doc.page_content for doc in _doc_splits]
-    try:
-        all_embeddings = _embeddings_model.embed_documents(texts_to_embed)
-    except Exception as e:
-        logger.error(f"Error during batch embedding generation: {str(e)}", exc_info=True)
-        return [] # Return empty list on failure
-
-    log_time_info(start_time, "embeddings generation")
-    logger.info(f"Generated {len(all_embeddings)} embeddings successfully")
-    
-    return all_embeddings
-
 
 def generate_query_or_respond(state: MessagesState):
     """Call the model to generate a response based on the current state.
@@ -564,6 +496,7 @@ def main():
 
     # System Initialization Block
     if not st.session_state.get("system_ready", False):
+        logger.info("System not ready. Attempting to load resources.")
         with st.spinner("Initializing system... Please wait."):
             # Pass the data path to the resource loading function
             all_resources = load_and_prepare_resources(DATA_PATH)
@@ -572,18 +505,26 @@ def main():
                 st.session_state.update(all_resources)
                 st.session_state.system_ready = True
                 st.success("✅ System initialized successfully!")
-                logger.info(
-                    "System initialized successfully and resources populated in session state."
-                )
+                logger.info("Successfully loaded resources and set system_ready to True.")
                 # Display info about loaded docs from session state for consistency
                 if "docs" in st.session_state and "doc_splits" in st.session_state:
                     st.write(
                         f"Loaded {len(st.session_state['docs'])} documents and "
                         f"{len(st.session_state['doc_splits'])} document splits."
                     )
+                else:
+                    logger.warning("Docs or doc_splits not found in session_state after resource loading.")
             else:
                 st.error(
                     "System initialization failed. Critical resources could not be loaded. Please check logs or try refreshing."
+                )
+                logger.error(
+                    "Failed to load resources or graph missing. System_ready will be False."
+                )
+                # Ensure system_ready is explicitly False if it failed
+                st.session_state.system_ready = False
+                logger.error( # Duplicated from original, kept for explicitness
+                    "System initialization failed: load_and_prepare_resources returned None or incomplete data."
                 )
                 logger.error(
                     "System initialization failed: load_and_prepare_resources returned None or incomplete data."
@@ -591,6 +532,8 @@ def main():
                 st.session_state.system_ready = False
                 # The app will be non-functional for queries if initialization fails.
 
+    else:
+        logger.info("System already ready. Skipping resource loading.")
     # Main application logic - only if system is ready
     query = st.text_input("Ask a question about the documents:")
     if query:
