@@ -439,14 +439,17 @@ def setup_retriever(
         
         # Generate embeddings in parallel with caching
         all_embeddings = generate_embeddings_in_parallel(doc_splits, embeddings)
+        if not all_embeddings or len(all_embeddings) != len(doc_splits):
+            logger.error("Embeddings generation failed or returned incorrect number of embeddings.")
+            return None
         
         # Create vector store with pre-computed embeddings
         texts = [doc.page_content for doc in doc_splits]
-        vector_store = InMemoryVectorStore.from_texts(
-            texts=texts,
-            embedding=embeddings,
-            metadatas=[doc.metadata for doc in doc_splits],
-            embeddings=all_embeddings
+        vector_store = InMemoryVectorStore.from_embeddings(
+            texts=texts, # The text content for each document
+            embeddings=all_embeddings, # The pre-computed embeddings
+            embedding=embeddings, # The embedding model (for consistency/future use by the store)
+            metadatas=[doc.metadata for doc in doc_splits]
         )
         log_time_info(start_time, "vector store creation")
         
@@ -471,48 +474,31 @@ def setup_retriever(
     type: lambda x: str(x),
 })
 def generate_embeddings_in_parallel(
-    _doc_splits: List[Any], _embeddings_model: HuggingFaceEmbeddings, batch_size: int = 20
+    _doc_splits: List[Any], _embeddings_model: HuggingFaceEmbeddings
 ) -> List[List[float]]:
     """
-    Generate embeddings for document splits in parallel batches.
+    Generate embeddings for document splits.
+    Relies on the internal batching mechanism of the HuggingFaceEmbeddings model.
     Args:
         _doc_splits: List of document splits to generate embeddings for (prefixed with _ to skip hashing)
         _embeddings_model: The embeddings model to use
-        batch_size: Number of documents to process in each batch
     Returns:
         List of embeddings vectors
     """
-    logger.info(f"Generating embeddings for {len(_doc_splits)} chunks in batches of {batch_size}")
+    if not _doc_splits:
+        logger.warning("No document splits provided for embedding generation.")
+        return []
+
+    logger.info(f"Generating embeddings for {len(_doc_splits)} document chunks...")
     start_time = time.time()
     
-    all_embeddings = []
-    
-    def process_batch(batch: List[Any]) -> List[List[float]]:
-        texts = [doc.page_content for doc in batch]
-        try:
-            batch_embeddings = _embeddings_model.embed_documents(texts)
-            logger.info(f"✅ Successfully embedded batch of {len(texts)} documents")
-            return batch_embeddings
-        except Exception as e:
-            logger.error(f"❌ Failed to embed batch: {str(e)}")
-            return []
-    
-    # Process in batches using ThreadPoolExecutor
-    with ThreadPoolExecutor() as executor:
-        batches = [
-            _doc_splits[i:i + batch_size] 
-            for i in range(0, len(_doc_splits), batch_size)
-        ]
-        futures = [executor.submit(process_batch, batch) for batch in batches]
-        
-        for idx, future in enumerate(as_completed(futures), 1):
-            try:
-                batch_embeddings = future.result()
-                all_embeddings.extend(batch_embeddings)
-                logger.info(f"Completed batch {idx}/{len(batches)}")
-            except Exception as e:
-                logger.error(f"Error processing batch {idx}: {str(e)}")
-    
+    texts_to_embed = [doc.page_content for doc in _doc_splits]
+    try:
+        all_embeddings = _embeddings_model.embed_documents(texts_to_embed)
+    except Exception as e:
+        logger.error(f"Error during batch embedding generation: {str(e)}", exc_info=True)
+        return [] # Return empty list on failure
+
     log_time_info(start_time, "embeddings generation")
     logger.info(f"Generated {len(all_embeddings)} embeddings successfully")
     
