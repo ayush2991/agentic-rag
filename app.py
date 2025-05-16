@@ -4,7 +4,7 @@ import logging
 import nest_asyncio
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.tools.retriever import create_retriever_tool
 from langgraph.graph import MessagesState
 from langchain.chat_models import init_chat_model
@@ -116,15 +116,17 @@ def check_relevance_and_suggest_action(state: MessagesState) -> Dict[str, str]:
                 }
             ]
         )
-        decision = RelevanceBasedAction.GENERATE_ANSWER if response.relevance == RelevanceDecision.RELEVANT else RelevanceBasedAction.REWRITE_QUESTION
+        decision = (
+            RelevanceBasedAction.GENERATE_ANSWER
+            if response.relevance == RelevanceDecision.RELEVANT
+            else RelevanceBasedAction.REWRITE_QUESTION
+        )
         logger.info(f"Relevance decision for query: {decision}")
         return decision
 
     except Exception as e:
         logger.error(f"Relevance check failed: {str(e)}", exc_info=True)
-        st.error(
-            f"An error occurred while checking document relevance: {str(e)}"
-        )
+        st.error(f"An error occurred while checking document relevance: {str(e)}")
         return RelevanceBasedAction.GENERATE_ANSWER
 
 
@@ -233,6 +235,7 @@ st.set_page_config(
 
 nest_asyncio.apply()  # For WebBaseLoader in sync Streamlit environment
 
+
 @st.cache_resource(ttl=24 * 60 * 60)
 def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     """
@@ -244,11 +247,11 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
     logger.info("Starting resource initialization")
     try:
         logger.info(f"Attempting to load documents from path: {_data_path}")
-        
+
         # Load all text files from the data directory
         docs = []
         for filename in os.listdir(_data_path):
-            if filename.endswith('.txt') or filename.endswith('.md'):
+            if filename.endswith(".txt") or filename.endswith(".md"):
                 file_path = os.path.join(_data_path, filename)
                 try:
                     loader = TextLoader(file_path)
@@ -257,23 +260,26 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
                 except Exception as e:
                     logger.error(f"Error loading {filename}: {str(e)}")
                     continue
-        
+
         if not docs:
-            logger.error(f"No documents loaded from path: {_data_path}. Ensure the directory exists and contains supported files.")
+            logger.error(
+                f"No documents loaded from path: {_data_path}. Ensure the directory exists and contains supported files."
+            )
             return None
         logger.info(f"Successfully loaded {len(docs)} documents.")
-        
+
         text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             chunk_size=100, chunk_overlap=50
         )
         doc_splits = text_splitter.split_documents(docs)
         logger.info(f"Split documents into {len(doc_splits)} chunks.")
 
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_CONFIG["model"], google_api_key=st.secrets["google_api_key"]
-        )
+        model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        hf_embeddings = HuggingFaceEmbeddings(
+            model_name=model_name, model_kwargs={"device": "cpu"}
+        )  # Or 'cuda' if you have a GPU
 
-        retriever_components = setup_retriever(doc_splits, embeddings)
+        retriever_components = setup_retriever(doc_splits, hf_embeddings)
         if not retriever_components:
             logger.error("Failed to setup retriever components.")
             return None
@@ -325,8 +331,8 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
             {
                 # Map the enum values to node names
                 RelevanceBasedAction.GENERATE_ANSWER: "generate_answer",
-                RelevanceBasedAction.REWRITE_QUESTION: "rewrite_query"
-            }
+                RelevanceBasedAction.REWRITE_QUESTION: "rewrite_query",
+            },
         )
 
         workflow.add_edge("generate_answer", END)
@@ -357,7 +363,7 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
 
 
 def setup_retriever(
-    doc_splits: List[Any], embeddings: GoogleGenerativeAIEmbeddings
+    doc_splits: List[Any], embeddings: HuggingFaceEmbeddings
 ) -> Optional[
     Tuple[InMemoryVectorStore, Any, Any]
 ]:  # Using Any for retriever and tool for brevity
