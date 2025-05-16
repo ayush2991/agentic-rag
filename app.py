@@ -324,7 +324,7 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
         logger.info(f"Successfully loaded {len(docs)} documents.")
 
         text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-            chunk_size=100, chunk_overlap=50
+            chunk_size=250, chunk_overlap=50
         )
         doc_splits = text_splitter.split_documents(docs)
         log_time_info(start_time, "document splitting")
