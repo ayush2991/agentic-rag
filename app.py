@@ -10,6 +10,8 @@ from langgraph.graph import MessagesState
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, BaseMessage
 from typing import Union, Dict, Any, Optional, Tuple, List
+from pydantic import BaseModel, Field, field_validator
+from enum import Enum
 
 # Constants
 URLS = [
@@ -26,6 +28,92 @@ RETRIEVER_CONFIG = {
     "search_type": "similarity",
     "search_kwargs": {"k": 4} # lambda_mult is for MMR, not typically similarity
 }
+
+class RelevanceDecision(str, Enum):
+    """Enum for relevance decision types."""
+    RELEVANT = "RELEVANT"
+    NOT_RELEVANT = "NOT_RELEVANT"
+
+class RelevanceBasedAction(str, Enum):
+    """Enum for actions based on relevance decision."""
+    GENERATE_ANSWER = "GENERATE_ANSWER"
+    REWRITE_QUESTION = "REWRITE_QUESTION"
+
+class RelevanceCheckOutput(BaseModel):
+    """
+    Pydantic model for the structured output of the relevance checking LLM.
+    """
+    relevance: RelevanceDecision = Field(
+        ...,
+        description="The assessment of whether the document chunk is relevant to the user's query. Must be 'RELEVANT' or 'NOT_RELEVANT'."
+    )
+    reason: str = Field(
+        ...,
+        min_length=5, # Ensure the reason is not overly terse
+        max_length=200, # Keep the reason concise
+        description="A brief explanation (5-200 characters) for the relevance assessment."
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def reason_must_be_substantive(cls, value: str) -> str:
+        if value.strip().lower() in ["none", "n/a", "no reason", "yes", "no"]:
+            raise ValueError("Reason must be a substantive explanation.")
+        return value
+
+@st.cache_data
+def check_relevance_and_suggest_action(
+        document: str,
+        query: str,
+        _relevance_check_model: Any) -> RelevanceBasedAction:
+    '''
+    Check the relevance of a document chunk to a user query using a language model.
+    Args:
+        document (str): The document chunk to check.
+        query (str): The user query.
+        _relevance_check_model: The language model to use for relevance checking.
+    Returns:
+        RelevanceBasedAction: The action to take based on the relevance check.
+    '''
+    try:
+        # Call the relevance check model
+        response = _relevance_check_model.with_structured_output(RelevanceCheckOutput).invoke(
+            [{"role": "user", "content": f"Is this document relevant to the query '{query}'? {document}"}]
+        )
+        if isinstance(response, RelevanceCheckOutput):
+            if response.relevance == RelevanceDecision.RELEVANT:
+                return RelevanceBasedAction.GENERATE_ANSWER
+            else:
+                return RelevanceBasedAction.REWRITE_QUESTION
+        else:
+            raise ValueError("Unexpected response format from relevance check model.")
+    except Exception as e:
+        logger.error(f"Error during relevance check: {str(e)}", exc_info=True)
+        return RelevanceBasedAction.GENERATE_ANSWER
+    
+@st.cache_data
+def generate_answer(document: str, query: str) -> str:
+    """
+    Generate an answer based on the document and user query.
+    Args:
+        document (str): The document chunk to use for generating the answer.
+        query (str): The user query.
+    Returns:
+        str: The generated answer.
+    """
+    try:
+        # Call the response model to generate an answer
+        response = st.session_state.response_model.invoke(
+            [{"role": "user", "content": f"Answer the question '{query}' based on this document: {document}"}]
+        )
+        if isinstance(response, AIMessage):
+            return {"messages": [response]}
+        else:
+            raise ValueError("Unexpected response format from answer generation model.")
+    except Exception as e:
+        logger.error(f"Error during answer generation: {str(e)}", exc_info=True)
+        return "An error occurred while generating the answer."
+
 
 # Page configuration
 st.set_page_config(
@@ -79,12 +167,20 @@ def load_and_prepare_resources(_urls: Tuple[str, ...]) -> Optional[Dict[str, Any
         vector_store, retriever, retriever_tool = retriever_components
 
         # Initialize chat model with correct provider
-        response_model_with_tools = init_chat_model(
+        response_model = init_chat_model(
             model="gemini-2.0-flash",
             model_provider="google-genai", # Ensure this matches your init_chat_model capabilities
             google_api_key=st.secrets["google_api_key"]
-        ).bind_tools([retriever_tool])
-        logger.info("Chat model initialized and tools bound.")
+        )
+        logger.info("Main response model initialized.")
+
+        # Initialize chat model for relevance checking
+        relevance_check_model = init_chat_model(
+            model="gemini-2.0-flash", # Using the same model type for simplicity
+            model_provider="google-genai",
+            google_api_key=st.secrets["google_api_key"]
+        )
+        logger.info("Relevance check model initialized.")
         
         # Return all created resources
         return {
@@ -94,7 +190,8 @@ def load_and_prepare_resources(_urls: Tuple[str, ...]) -> Optional[Dict[str, Any
             "vector_store": vector_store,
             "retriever": retriever,
             "retriever_tool": retriever_tool,
-            "response_model": response_model_with_tools
+            "response_model": response_model,
+            "relevance_check_model": relevance_check_model
         }
     except Exception as e:
         logger.error(f"Initialization error during resource loading: {str(e)}", exc_info=True)
@@ -140,7 +237,7 @@ def process_query(query: str) -> Optional[AIMessage]:
     try:
         # Invoke the model with the user query.
         # The response_model is expected to be a LangChain runnable (e.g., ChatModel bound with tools)
-        response: BaseMessage = st.session_state.response_model.invoke(
+        response: BaseMessage = st.session_state.response_model.bind_tools([st.session_state.retriever_tool]).invoke(
             [{"role": "user", "content": query}]
         )
         if isinstance(response, AIMessage):
@@ -207,7 +304,7 @@ def main():
             # Pass URLS as a tuple to ensure hashability for @st.cache_resource
             all_resources = load_and_prepare_resources(tuple(URLS)) 
             
-            if all_resources and "response_model" in all_resources:
+            if all_resources and "response_model" in all_resources and "relevance_check_model" in all_resources:
                 st.session_state.update(all_resources)
                 st.session_state.system_ready = True
                 st.success("✅ System initialized successfully!")
