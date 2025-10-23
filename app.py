@@ -5,7 +5,7 @@ import nest_asyncio
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain.tools.retriever import create_retriever_tool
+from langchain_core.tools import create_retriever_tool
 from langgraph.graph import MessagesState
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
@@ -20,7 +20,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 # Configure logging
 logging.basicConfig(
