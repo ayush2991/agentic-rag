@@ -1,10 +1,8 @@
 import streamlit as st
 from langchain_community.document_loaders import TextLoader
 import logging
-from qdrant_client import QdrantClient, models
 import nest_asyncio
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain.tools.retriever import create_retriever_tool
@@ -23,7 +21,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
 from langchain.schema import Document
-from langchain_core.retrievers import BaseRetriever
 
 # Configure logging
 logging.basicConfig(
@@ -406,62 +403,11 @@ def load_and_prepare_resources(_data_path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-class QdrantRetriever(BaseRetriever):
-    """Custom retriever for Qdrant vector store."""
-    
-    client: QdrantClient
-    collection_name: str
-    k: int = 4
-    embeddings: GoogleGenerativeAIEmbeddings
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def __init__(self, client: QdrantClient, collection_name: str, k: int = 4, api_key: str = None):
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
-            task_type="retrieval_query",
-            google_api_key=api_key or st.secrets["google_api_key"]
-        )
-        # Initialize Pydantic model with all required fields
-        super().__init__(
-            client=client,
-            collection_name=collection_name,
-            k=k,
-            embeddings=embeddings
-        )
-
-    def _get_relevant_documents(self, query: str) -> List[Document]:
-        # Generate query embedding
-        query_embedding = self.embeddings.embed_query(query)
-        
-        # Search in Qdrant
-        search_results = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_embedding,
-            limit=self.k,
-            with_payload=True
-        )
-        
-        # Convert results to Documents
-        return [
-            Document(
-                page_content=result.payload.get('text_content', ''),
-                metadata={
-                    'score': result.score,
-                    'source_file': result.payload.get('source_file'),
-                    'chunk_index': result.payload.get('chunk_index')
-                }
-            ) 
-            for result in search_results
-        ]
-
-
 def setup_retriever(
     doc_splits: List[Document]
-) -> Optional[Tuple[BaseRetriever, Any]]:
-    """Setup Qdrant vector store and retriever tool."""
-    logger.info(f"Setting up Qdrant retriever with {len(doc_splits)} document splits")
+) -> Optional[Tuple[Any, Any]]:
+    """Setup in-memory vector store and retriever tool."""
+    logger.info(f"Setting up in-memory retriever with {len(doc_splits)} document splits")
     if not doc_splits:
         logger.warning("No document splits provided to setup_retriever.")
         return None
@@ -469,31 +415,34 @@ def setup_retriever(
     try:
         start_time = time.time()
         
-        # Initialize Qdrant client
-        QDRANT_CLOUD_URL = "https://65cc3c79-a0f3-45d6-820e-cbc18bd3c4cb.us-east4-0.gcp.cloud.qdrant.io:6333" # Recommended: Set as environment variable
-        QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.7YG52Wg3P9Hsmo8Lia0ONy59vkI23fXHpUY4_ugvG6A"   # Recommended: Set as environment variable
-
-        qdrant_client = QdrantClient(
-            url=QDRANT_CLOUD_URL,
-            api_key=QDRANT_API_KEY
+        # Initialize embeddings model
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004",
+            task_type="retrieval_document",
+            google_api_key=st.secrets["google_api_key"]
         )
-        logger.info("Qdrant client initialized successfully.")
-        # Initialize collection
+        logger.info("Embeddings model initialized successfully.")
         
+        # Create in-memory vector store
+        vector_store = InMemoryVectorStore.from_documents(
+            documents=doc_splits,
+            embedding=embeddings
+        )
+        logger.info("In-memory vector store created successfully.")
         
-        # Create custom retriever with proper field initialization
-        retriever = QdrantRetriever(
-            client=qdrant_client,
-            collection_name="harry_potter_collection_2",
-            api_key=st.secrets["google_api_key"]  # Pass API key explicitly
+        # Create retriever from vector store
+        retriever = vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 4}
         )
         
         retriever_tool = create_retriever_tool(
             retriever,
             "retrieve_harry_potter",
-            "Search and return snippets from the Harry Potter books. Uses Qdrant vector store.",
+            "Search and return snippets from the Harry Potter books. Uses in-memory vector store.",
         )
         logger.info("Retriever setup successful.")
+        log_time_info(start_time, "retriever setup")
         return retriever, retriever_tool
     except Exception as e:
         logger.error(f"Error setting up retriever: {str(e)}", exc_info=True)
