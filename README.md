@@ -7,7 +7,7 @@ An intelligent Retrieval-Augmented Generation (RAG) application built with LangG
 - **Agentic Workflow**: Intelligent decision-making using LangGraph state machines
 - **Document Relevance Assessment**: Automatically evaluates if retrieved documents are relevant to the query
 - **Query Rewriting**: Improves queries when initial retrieval results are not relevant
-- **Vector Search**: Uses Qdrant cloud vector database for efficient document retrieval
+- **Vector Search**: Uses in-memory vector database for efficient document retrieval
 - **Streamlit Interface**: User-friendly web interface with step-by-step workflow visualization
 - **Google Gemini Integration**: Powered by Google's Gemini 2.0 Flash model for high-quality responses
 
@@ -27,7 +27,6 @@ The application follows an agentic RAG pattern with the following workflow:
 
 - Python 3.8+
 - Google API key for Gemini models
-- Qdrant Cloud account and API key
 - Streamlit Secrets configuration
 
 ## 🚀 Installation
@@ -59,7 +58,6 @@ The application uses several configuration constants that can be modified in `ap
 
 - `DATA_PATH`: Path to your document directory (default: `"./data"`)
 - `RETRIEVER_CONFIG`: Search configuration for document retrieval
-- Qdrant settings: Update the cloud URL and API key in the `setup_retriever` function
 
 ## 🎯 Usage
 
@@ -88,7 +86,7 @@ The application uses several configuration constants that can be modified in `ap
 ### Models and Tools
 - **Response Model**: Google Gemini 2.0 Flash for answer generation
 - **Relevance Check Model**: Separate model instance for document relevance assessment
-- **QdrantRetriever**: Custom retriever implementation for Qdrant vector search
+- **InMemoryVectorStore**: In-memory vector storage for fast document retrieval
 
 ### Key Functions
 - `generate_query_or_respond()`: Decides whether to retrieve or respond directly
@@ -119,7 +117,7 @@ agentic-rag/
 - Loads text files from the `data/` directory
 - Splits documents into chunks using `RecursiveCharacterTextSplitter`
 - Creates embeddings using Google's text-embedding-004 model
-- Stores in Qdrant cloud vector database
+- Stores in in-memory vector database
 
 ### 2. Query Processing Pipeline
 - **Initial Assessment**: Model determines if query needs document retrieval
@@ -137,7 +135,7 @@ agentic-rag/
 - **Frontend**: Streamlit
 - **LLM Orchestration**: LangGraph
 - **Language Models**: Google Gemini 2.0 Flash
-- **Vector Database**: Qdrant Cloud
+- **Vector Database**: In-Memory Vector Store
 - **Document Processing**: LangChain
 - **Embeddings**: Google text-embedding-004
 
