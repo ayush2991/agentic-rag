@@ -7,5 +7,4 @@ beautifulsoup4
 watchdog
 langchain_google_genai
 nest_asyncio
-langchain-huggingface
-qdrant-client
+tiktoken

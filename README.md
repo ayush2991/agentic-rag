@@ -1,36 +1,71 @@
-# Agentic RAG Application: Harry Potter Edition 🪄
+# Agentic RAG System: LangGraph Implementation
 
-An intelligent Retrieval-Augmented Generation (RAG) application built with LangGraph and Streamlit that answers questions about the Harry Potter book series. The application uses an agentic workflow to intelligently decide when to retrieve documents, assess relevance, and rewrite queries for better results.
+A production-grade Retrieval-Augmented Generation (RAG) system demonstrating advanced agentic AI patterns using LangGraph. Built for intelligent question-answering over the complete Harry Potter book series with autonomous decision-making, adaptive query refinement, and state-driven workflow orchestration.
 
-## 🌟 Features
+## Technical Overview
 
-- **Agentic Workflow**: Intelligent decision-making using LangGraph state machines
-- **Document Relevance Assessment**: Automatically evaluates if retrieved documents are relevant to the query
-- **Query Rewriting**: Improves queries when initial retrieval results are not relevant
-- **Vector Search**: Uses Qdrant cloud vector database for efficient document retrieval
-- **Streamlit Interface**: User-friendly web interface with step-by-step workflow visualization
-- **Google Gemini Integration**: Powered by Google's Gemini 2.0 Flash model for high-quality responses
+This project showcases sophisticated RAG implementation with:
 
-## 🏗️ Architecture
+- **Agentic Workflow Orchestration**: LangGraph StateGraph for autonomous routing and decision-making
+- **Adaptive Query Refinement**: Self-correcting system with automatic query rewriting (max 2 iterations)
+- **Relevance Evaluation**: Structured output validation using Pydantic models
+- **In-Memory Vector Store**: Fast semantic search with Google embeddings (768-dimensional)
+- **Production-Ready Engineering**: Comprehensive caching, logging, and error handling
 
-The application follows an agentic RAG pattern with the following workflow:
+## Core Technologies
 
-1. **Query Processing**: User submits a question
-2. **Tool Decision**: Model decides whether to retrieve documents or respond directly
-3. **Document Retrieval**: If needed, searches the Harry Potter document collection
-4. **Relevance Check**: Evaluates if retrieved documents are relevant to the query
-5. **Response Generation or Query Rewrite**: Either generates an answer or rewrites the query for better results
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| Orchestration | LangGraph | State machine for agentic workflows |
+| RAG Framework | LangChain | Tool integration and document processing |
+| LLM | Google Gemini 2.0 Flash | Response generation and decision-making |
+| Embeddings | text-embedding-004 | Semantic vector representations |
+| Vector Store | InMemoryVectorStore | Fast similarity search |
+| UI | Streamlit | Interactive web interface |
+| Tokenization | tiktoken | Token-aware text chunking |
 
-![Workflow Diagram](./agentic-rag-graph.png)
+## Architecture
 
-## 📋 Prerequisites
+### Agentic Workflow Pattern
 
-- Python 3.8+
+```
+User Query → Query Analysis → [Decision: Retrieve?]
+                                       ↓
+                              Semantic Retrieval (k=5)
+                                       ↓
+                            Relevance Evaluation (Structured Output)
+                                       ↓
+                        ┌──────────────┴──────────────┐
+                        ↓                             ↓
+                 Generate Answer              Rewrite Query
+                        ↓                             ↓
+                     Return                    Loop Back
+                                          (Max 2 iterations)
+```
+
+### Key Nodes
+
+1. **generate_query_or_respond**: LLM determines if retrieval is necessary
+2. **retrieve**: ToolNode executes semantic search over vector store
+3. **check_relevance_and_suggest_action**: Structured validation returns "GENERATE_ANSWER" or "REWRITE_QUESTION"
+4. **rewrite_query**: Query reformulation with retry limits
+5. **generate_answer**: Context-grounded response synthesis
+
+### State Management
+
+- **LangGraph MessagesState**: Maintains full conversation history
+- **Conditional Edges**: Dynamic routing based on relevance evaluation
+- **Tool Integration**: Retriever exposed as LangChain tool for LLM invocation
+
+## Installation & Setup
+
+### Prerequisites
+
+- Python 3.9+
 - Google API key for Gemini models
-- Qdrant Cloud account and API key
-- Streamlit Secrets configuration
+- 7 Harry Potter books as `.txt` files
 
-## 🚀 Installation
+### Installation Steps
 
 1. **Clone the repository**:
    ```bash
@@ -43,130 +78,178 @@ The application follows an agentic RAG pattern with the following workflow:
    pip install -r requirements.txt
    ```
 
-3. **Set up your data**:
-   - Place your Harry Potter text files in the `./data/` directory
-   - Supported formats: `.txt`, `.md`
-
-4. **Configure secrets**:
-   Create a `.streamlit/secrets.toml` file with your API keys:
+3. **Configure API key**:
+   
+   Edit `config.toml`:
    ```toml
-   google_api_key = "your-google-api-key"
+   google_api_key = "your-google-api-key-here"
    ```
 
-## 🔧 Configuration
+4. **Place data files**:
+   
+   Add your Harry Potter `.txt` files to the `./data/` directory:
+   ```
+   data/
+   ├── 01 Harry Potter and the Sorcerers Stone.txt
+   ├── 02 Harry Potter and the Chamber of Secrets.txt
+   └── ... (remaining books)
+   ```
 
-The application uses several configuration constants that can be modified in `app.py`:
+## Usage
 
-- `DATA_PATH`: Path to your document directory (default: `"./data"`)
-- `RETRIEVER_CONFIG`: Search configuration for document retrieval
-- Qdrant settings: Update the cloud URL and API key in the `setup_retriever` function
-
-## 🎯 Usage
-
-1. **Start the application**:
+1. **Run the application**:
    ```bash
    streamlit run app.py
    ```
 
-2. **Access the web interface**: Open your browser to `http://localhost:8501`
+2. **Access the interface**: Navigate to `http://localhost:8501`
 
-3. **Ask questions**: Type questions about Harry Potter in the text input field
+3. **First run**: Wait 30-60 seconds for initialization (document loading + vectorization)
+
+4. **Subsequent runs**: <1 second (cached resources)
 
 ### Example Queries
 
 - "Who betrayed Harry's parents?"
-- "What is a Horcrux?"
-- "How does Harry defeat Voldemort?"
-- "What is the significance of the Deathly Hallows?"
+- "What is a Horcrux and how are they destroyed?"
+- "Explain the prophecy about Harry and Voldemort"
+- "What are the Deathly Hallows?"
 
-## 🧩 Core Components
+## Implementation Details
 
-### State Management
-- **MessagesState**: LangGraph state container for conversation history
-- **Workflow Nodes**: Individual processing steps in the RAG pipeline
+### Data Processing Pipeline
 
-### Models and Tools
-- **Response Model**: Google Gemini 2.0 Flash for answer generation
-- **Relevance Check Model**: Separate model instance for document relevance assessment
-- **QdrantRetriever**: Custom retriever implementation for Qdrant vector search
+```python
+# Text Chunking
+RecursiveCharacterTextSplitter (tiktoken-based)
+├── Chunk Size: 250 tokens
+├── Overlap: 50 tokens
+└── Model: gpt-4 tokenizer
 
-### Key Functions
-- `generate_query_or_respond()`: Decides whether to retrieve or respond directly
-- `check_relevance_and_suggest_action()`: Evaluates document relevance
-- `rewrite_query()`: Improves queries for better retrieval results
-- `generate_answer()`: Creates final responses based on retrieved documents
+# Embeddings
+GoogleGenerativeAIEmbeddings
+├── Model: text-embedding-004
+├── Dimensions: 768
+└── Task Type: retrieval_document
 
-## 📁 Project Structure
+# Vector Store
+InMemoryVectorStore.from_documents()
+└── Retrieval: k=5 most similar chunks
+```
+
+### Agentic Decision-Making
+
+The system implements true agentic behavior through:
+
+- **Autonomous Routing**: LLM decides if retrieval is needed (no hardcoded rules)
+- **Self-Correction**: Automatic query rewriting when context is insufficient
+- **Structured Evaluation**: Pydantic models for deterministic relevance checking
+- **Retry Logic**: Maximum iteration limits prevent infinite loops (MAX_QUERY_REWRITES = 2)
+
+### Performance Optimizations
+
+**Caching Strategy**:
+```python
+@st.cache_resource(ttl=604800)  # 7-day TTL
+def load_and_prepare_resources(data_path: str):
+    # Loads docs, creates embeddings, builds vector store
+    # Cached after first run for instant reloads
+```
+
+**Benefits**:
+- First run: 30-60 seconds
+- Subsequent runs: <1 second
+- Automatic invalidation on code changes
+
+### Core Functions
+- `load_and_prepare_resources()`: Cached initialization of docs, embeddings, vector store, and workflow graph
+- `setup_retriever()`: Creates InMemoryVectorStore with Google embeddings
+- `generate_query_or_respond()`: Initial node - LLM decides retrieval necessity
+- `check_relevance_and_suggest_action()`: Structured output returns "GENERATE_ANSWER" or "REWRITE_QUESTION"
+- `rewrite_query()`: Query reformulation with iteration limits
+- `generate_answer()`: Context-grounded response synthesis
+
+## Project Structure
 
 ```
 agentic-rag/
-├── app.py                          # Main application file
+├── app.py                          # Main application
 ├── requirements.txt                # Python dependencies
-├── config.toml                     # Configuration file
+├── config.toml                     # Configuration (API keys)
 ├── README.md                       # This file
-├── agentic-rag-graph.png          # Workflow diagram
-├── data/                           # Document storage
+├── TECHNICAL_OVERVIEW.md          # Detailed technical documentation
+├── data/                           # Harry Potter books (7 .txt files)
 │   ├── 01 Harry Potter and the Sorcerers Stone.txt
 │   ├── 02 Harry Potter and the Chamber of Secrets.txt
-│   └── ...                        # Additional book files
+│   └── ...
 └── utils/
-    └── logging_utils.py            # Logging utilities
+    └── logging_utils.py            # Logging configuration
 ```
 
-## 🔄 Workflow Details
+## Key Differentiators
 
-### 1. Document Processing
-- Loads text files from the `data/` directory
-- Splits documents into chunks using `RecursiveCharacterTextSplitter`
-- Creates embeddings using Google's text-embedding-004 model
-- Stores in Qdrant cloud vector database
+### What Makes This Implementation Stand Out
 
-### 2. Query Processing Pipeline
-- **Initial Assessment**: Model determines if query needs document retrieval
-- **Retrieval**: Searches for relevant document chunks using vector similarity
-- **Relevance Check**: Evaluates if retrieved documents answer the query
-- **Decision Branch**: Either generate answer or rewrite query for better results
+- **Conditional Routing**: Lambda functions in edges enable dynamic flow control
+- **Tool Abstraction**: LangChain tools allow LLM to "use" the retriever as a function
+- **State Immutability**: Proper state updates without side effects
+- **Logging Infrastructure**: Structured logs with rotation (10MB max, 5 backups)
+- **Error Resilience**: Try-except blocks with graceful degradation
 
-### 3. Response Generation
-- Combines retrieved context with user query
-- Uses Google Gemini to generate comprehensive answers
-- Displays step-by-step process in Streamlit interface
+## Configuration
 
-## 🛠️ Technical Stack
+### Key Constants (app.py)
 
-- **Frontend**: Streamlit
-- **LLM Orchestration**: LangGraph
-- **Language Models**: Google Gemini 2.0 Flash
-- **Vector Database**: Qdrant Cloud
-- **Document Processing**: LangChain
-- **Embeddings**: Google text-embedding-004
+```python
+DATA_PATH = "./data"              # Document directory
+MAX_QUERY_REWRITES = 2            # Retry limit for query refinement
+RETRIEVER_CONFIG = {
+    "search_kwargs": {"k": 5}     # Return top 5 chunks
+}
+```
 
-## 📊 Performance Features
+### Prompts
 
-- **Parallel Document Loading**: Uses ThreadPoolExecutor for efficient file processing
-- **Caching**: Streamlit resource caching for faster subsequent loads
-- **Logging**: Comprehensive logging with performance timing
-- **Error Handling**: Robust error handling throughout the pipeline
+- **GRADE_PROMPT**: Relevance evaluation with reasoning chain
+- **REWRITE_PROMPT**: Query reformulation instructions
+- **ANSWER_PROMPT**: Context-grounded response generation
 
-## 🔍 Monitoring and Debugging
+## Logging
 
-The application includes detailed logging for monitoring:
-- Document loading performance
-- Query processing steps
-- Relevance check decisions
-- Error tracking and debugging
+**Console**: INFO level with clean formatting  
+**File**: DEBUG level with full context (`./logs/app.log`)  
+**Rotation**: 10MB max size, 5 backup files
 
-Logs are displayed in both the console and Streamlit interface for real-time monitoring.
+```python
+[2025-01-15 14:30:22,123] [INFO] [app] System initialized successfully
+[2025-01-15 14:30:25,456] [INFO] [app] Processing user query: 'Who betrayed...'
+```
 
-## 🤝 Contributing
+## For Technical Hiring Managers
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+This project demonstrates:
 
+- **LangGraph Expertise**: Advanced StateGraph orchestration with conditional routing
+- **RAG Implementation**: Complete pipeline from chunking to generation
+- **Agentic AI Patterns**: Autonomous decision-making, self-correction, adaptive refinement
+- **Production Engineering**: Caching strategies, logging infrastructure, error handling
+- **Clean Code**: Professional, maintainable, well-documented codebase
+- **Modern Stack**: Latest Google AI models, LangGraph, Streamlit
+
+**See also**: `TECHNICAL_OVERVIEW.md` for comprehensive architecture details
 
 ---
 
-*For questions or support, please open an issue in the GitHub repository.*
+**Author**: Aayush Agarwal  
+**Contact**: [GitHub](https://github.com/yourusername) | [LinkedIn](https://linkedin.com/in/yourprofile)  
+**License**: MIT
+
+
+1. **True Agentic Behavior**: Not just chained function calls - autonomous decision-making at each node
+2. **LangGraph Mastery**: Proper StateGraph usage with conditional edges and tool integration
+3. **Production Engineering**: Comprehensive caching, logging, error handling
+4. **Structured Outputs**: Pydantic models for type-safe LLM responses
+5. **Transparent Execution**: Full workflow trace visible in UI
+6. **Scalable Design**: Easy to swap LLMs, vector stores, or extend workflow
+
+### Technical Sophistication
